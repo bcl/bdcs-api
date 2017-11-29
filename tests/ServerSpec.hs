@@ -22,13 +22,18 @@ module ServerSpec
 import           BDCS.API.Recipe(Recipe(..), RecipeModule(..))
 import           BDCS.API.Server
 import           BDCS.API.V0
+import           Control.Conditional(whenM)
 import           Control.Exception (throwIO)
+import           Data.List(isSuffixOf)
 import qualified Data.Text as T
 import           Network.HTTP.Client (Manager, newManager, defaultManagerSettings)
 import           Network.Wai (Application)
 import           Network.Wai.Handler.Warp
 import           Servant
 import           Servant.Client
+import           System.Directory(copyFileWithMetadata, createDirectoryIfMissing, doesPathExist,
+                                  listDirectory, removeDirectoryRecursive)
+import           System.FilePath.Posix((</>))
 import           Test.Hspec
 
 {-# ANN module ("HLint: ignore Reduce duplication"  :: String) #-}
@@ -168,14 +173,33 @@ recipesChangesTest3 = do
     limits_ok response = rcrOffset response == 15 && rcrLimit response == 5
 
 
+-- | Start the app in a temporary directory for the recipes
+--
+-- First copy the example recipes into the temporary directory
+runTempApp :: FilePath -> FilePath -> FilePath -> IO Application
+runTempApp exampleRecipes gitRepoPath sqliteDbPath = do
+        whenM (doesPathExist gitRepoPath) $ removeDirectoryRecursive gitRepoPath
+        createDirectoryIfMissing True gitRepoPath
+        copyTOMLFiles exampleRecipes gitRepoPath
+        mkApp gitRepoPath sqliteDbPath
+  where
+    -- Copy files ending with .toml from one directory to another
+    copyTOMLFiles :: FilePath -> FilePath -> IO ()
+    copyTOMLFiles fromDir toDir = do
+        files <- filter (".toml" `isSuffixOf`) <$> listDirectory fromDir
+        let fromFiles = map (fromDir </>) files
+        let toFiles = map (toDir </>) files
+        mapM_ (\(from, to) -> copyFileWithMetadata from to) $ zip fromFiles toFiles
+
+
 -- XXX NOTE that the results tested here depend on the Recipes tests having been run
 -- Spec executes things in alphabetical order, so currently this is true.
 -- After /recipes/new is added this can be changed and it can depend on commits made
 -- via the API instead of directly.
 spec :: Spec
-spec =
+spec = do
     describe "/api" $
-        withClient (mkApp "/var/tmp/recipes" "/var/tmp/test-bdcs.db") $ do
+        withClient (runTempApp "./tests/recipes/" "/var/tmp/bdcs-tmp-recipes/" "/var/tmp/test-bdcs.db") $ do
             it "API Status" $ \env ->
                 try env getStatus `shouldReturn` ServerStatus "0.0.0" "0" "0" False
 
@@ -204,6 +228,11 @@ spec =
 
             it "Check offset and limit usage" $ \env ->
                 try env recipesChangesTest3 `shouldReturn` True
+
+    describe "cleanup" $
+        it "Remove the temporary directory" $
+            removeDirectoryRecursive "/var/tmp/bdcs-tmp-recipes/"
+
 
 withClient :: IO Application -> SpecWith ClientEnv -> SpecWith ()
 withClient x innerSpec =

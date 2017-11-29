@@ -108,8 +108,7 @@ mkApp gitRepoPath sqliteDbPath = do
 
     Git.init
     repo <- openOrCreateRepo gitRepoPath
---    commitRecipeDirectory repo "master" "./tests/recipes/"
-    void $ commitRecipeDirectory repo "master" "/var/tmp/test-recipes/"
+    void $ commitRecipeDirectory repo "master" gitRepoPath
     lock <- RWL.new
 
     let repoLock = GitLock lock repo
