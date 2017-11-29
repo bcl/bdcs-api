@@ -28,6 +28,7 @@ module BDCS.API.V0(PackageInfo(..),
                    RecipesListResponse(..),
                    RecipesInfoResponse(..),
                    RecipesChangesResponse(..),
+                   RecipesNewResponse(..),
                    RecipesAPIError(..),
                    RecipeChanges(..),
                    WorkspaceChanges(..),
@@ -38,6 +39,7 @@ module BDCS.API.V0(PackageInfo(..),
 import           BDCS.API.Error(createApiError)
 import           BDCS.API.Recipe
 import           BDCS.API.Recipes
+import           BDCS.API.TOMLMediaType
 import           BDCS.API.Utils(GitLock(..), argify)
 import           BDCS.API.Workspace
 import           BDCS.DB
@@ -103,6 +105,7 @@ type V0API = "package"  :> Capture "package" T.Text :> Get '[JSON] PackageInfo
         :<|> "recipes"  :> "changes" :> Capture "recipes" String
                                      :> QueryParam "offset" Int
                                      :> QueryParam "limit" Int :> Get '[JSON] RecipesChangesResponse
+        :<|> "recipes"  :> "new" :> ReqBody '[JSON, TOML] Recipe :> Post '[JSON] RecipesNewResponse
 
 v0ApiServer :: GitLock -> ConnectionPool -> Server V0API
 v0ApiServer repoLock pool = pkgInfoH
@@ -111,6 +114,7 @@ v0ApiServer repoLock pool = pkgInfoH
                        :<|> recipesListH
                        :<|> recipesInfoH
                        :<|> recipesChangesH
+                       :<|> recipesNewH
   where
     pkgInfoH package     = liftIO $ packageInfo pool package
     depsolvePkgH package = liftIO $ depsolvePkg pool package
@@ -118,6 +122,7 @@ v0ApiServer repoLock pool = pkgInfoH
     recipesListH         = recipesList repoLock "master"
     recipesInfoH recipes = recipesInfo repoLock "master" recipes
     recipesChangesH recipes offset limit = recipesChanges repoLock "master" recipes offset limit
+    recipesNewH recipe   = recipesNew repoLock "master" recipe
 
 packageInfo :: ConnectionPool -> T.Text -> IO PackageInfo
 packageInfo pool package = flip runSqlPersistMPool pool $ do
@@ -502,17 +507,39 @@ recipesChanges repoLock branch recipe_names moffset mlimit = liftIO $ RWL.withRe
                     CE.Handler (\(e :: GError) -> return $ Left (show e))]
 
 
+-- TOOD Add error message?
+data RecipesNewResponse = RecipesNewResponse {
+    rnrStatus :: Bool
+} deriving (Show, Eq)
+
+instance ToJSON RecipesNewResponse where
+  toJSON RecipesNewResponse{..} = object [
+      "status" .= rnrStatus ]
+
+instance FromJSON RecipesNewResponse where
+  parseJSON = withObject "/recipes/new response" $ \o -> do
+    rnrStatus <- o .: "status"
+    return RecipesNewResponse{..}
+
+-- | POST `/api/v0/recipes/new`
+-- Create or update a recipe.
+--
+-- The body of the post is a JSON representation of the recipe, using the same format
+-- received by `/api/v0/recipes/info/<recipes>`
+recipesNew :: GitLock -> T.Text -> Recipe -> Handler RecipesNewResponse
+recipesNew repoLock branch recipe = liftIO $ RWL.withRead (gitRepoLock repoLock) $ do
+    oid <- commitRecipe (gitRepo repoLock) branch recipe
+    return $ RecipesNewResponse True
+
+-- | * `/api/v0/recipes/freeze/<recipes>`
+-- |  - Return the contents of the recipe with frozen dependencies instead of expressions.
+-- |  - [Example JSON](fn.recipes_freeze.html#examples)
 -- | * `/api/v0/recipes/diff/<recipe>/<from_commit>/<to_commit>`
 -- |  - Return the diff between the two recipe commits. Set to_commit to NEWEST to use the newest commit.
 -- |  - [Example JSON](fn.recipes_diff.html#examples)
 -- | * `/api/v0/recipes/depsolve/<recipes>`
 -- |  - Return the recipe and summary information about all of its modules and packages.
 -- |  - [Example JSON](fn.recipes_depsolve.html#examples)
--- | * POST `/api/v0/recipes/new`
--- |  - Create or update a recipe.
--- |  - The body of the post is a JSON representation of the recipe, using the same format
--- |    received by `/api/v0/recipes/info/<recipes>`
--- |  - [Example JSON](fn.recipes_new.html#examples)
 -- | * DELETE `/api/v0/recipes/delete/<recipe>`
 -- |  - Delete the named recipe from the repository
 -- |  - [Example JSON](fn.recipes_delete.html#examples)
