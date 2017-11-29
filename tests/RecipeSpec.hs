@@ -21,9 +21,11 @@ module RecipeSpec
   where
 
 import           BDCS.API.Recipe
-import qualified Data.ByteString.Lazy as BSL
+import           BDCS.API.TOMLMediaType
 import           Data.Aeson
+import qualified Data.ByteString.Lazy as BSL
 import           Data.Maybe(fromJust)
+import           Data.String.Conversions(cs)
 import           Data.String.QQ
 import qualified Data.Text as T
 import           Test.Hspec
@@ -122,6 +124,12 @@ spec =
 
         it "Parse a JSON string and return a Recipe Record" $
             fromJSON (fromJust $ decode test1JSON) `shouldBe` Success test1Recipe
+
+        it "Output the TOML string from a Recipe Record" $
+            toTOML test1Recipe `shouldBe` cs test1TOML
+
+        it "Parse a TOML string and return a Recipe Record" $
+            parseTOML (cs test1TOML) `shouldBe` Right test1Recipe
 
         it "Bump the version in various ways" $ do
             bumpVersion Nothing        Nothing        `shouldBe` Right "0.0.1"

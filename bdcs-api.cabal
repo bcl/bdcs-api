@@ -84,6 +84,7 @@ test-suite spec
                         http-client,
                         servant-client,
                         servant-server,
+                        string-conversions,
                         string-qq,
                         text,
                         wai,
