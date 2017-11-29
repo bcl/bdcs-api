@@ -26,10 +26,12 @@ module BDCS.API.Recipe(bumpVersion,
                        RecipeModule(..))
   where
 
+import           BDCS.API.TOMLMediaType
 import           Data.Aeson
 import           Data.Aeson.Types(Result(..))
 import           Data.Maybe(fromMaybe)
 import qualified Data.SemVer as SV
+import           Data.String.Conversions(cs)
 import qualified Data.Text as T
 import           Text.Printf(printf)
 import           Text.Toml(parseTomlDoc)
@@ -61,6 +63,12 @@ instance ToJSON Recipe where
       , "description" .= rDescription
       , "packages"    .= rPackages
       , "modules"    .= rModules ]
+
+instance ToTOML Recipe where
+    toTOML recipe = cs $ recipeTOML recipe
+
+instance FromTOML Recipe where
+    parseTOML toml = parseRecipe $ cs toml
 
 
 data RecipeModule =

@@ -21,6 +21,7 @@ library
                         BDCS.API.Recipe,
                         BDCS.API.Recipes,
                         BDCS.API.Server,
+                        BDCS.API.TOMLMediaType,
                         BDCS.API.Utils,
                         BDCS.API.V0,
                         BDCS.API.Workspace
@@ -38,6 +39,7 @@ library
                         gi-ggit,
                         gi-glib,
                         haskell-gi-base,
+                        http-media,
                         http-types,
                         htoml,
                         monad-logger,
