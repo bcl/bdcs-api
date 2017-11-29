@@ -43,8 +43,10 @@ getErr :: ClientM [T.Text]
 getRecipes :: ClientM RecipesListResponse
 getRecipesInfo :: String -> ClientM RecipesInfoResponse
 getRecipesChanges :: String -> Maybe Int -> Maybe Int -> ClientM RecipesChangesResponse
+postRecipesNew :: Recipe -> ClientM RecipesNewResponse
 getStatus :<|> getPackage :<|> getDeps :<|> getErr
-          :<|> getRecipes :<|> getRecipesInfo :<|> getRecipesChanges = client proxyAPI
+          :<|> getRecipes :<|> getRecipesInfo :<|> getRecipesChanges
+          :<|> postRecipesNew = client proxyAPI
 
 
 -- Test results, depends on the contents of the ./tests/recipes files.
@@ -109,6 +111,15 @@ errorRecipeResponse =
                         ]
                         [RecipesAPIError "missing-recipe" "missing-recipe.toml is not present on branch master"]
 
+recipesNewResponse :: RecipesNewResponse
+recipesNewResponse = RecipesNewResponse True
+
+aTestRecipe :: Recipe
+aTestRecipe = Recipe "A Test Recipe" (Just "0.0.1") "A simple recipe to use for testing"
+                     [RecipeModule "rsync" "3.0.*"]
+                     [RecipeModule "httpd" "2.4.*"]
+
+
 -- If it has 0 errors, 1 change named http-server, 0 offset and a limit of 20 it passes
 recipesChangesTest1 :: ClientM Bool
 recipesChangesTest1 = do
@@ -172,16 +183,18 @@ spec =
                 try env getRecipes `shouldReturn` recipesListResponse
 
             it "Get a non-existant recipe's info" $ \env ->
-                try env (getRecipesInfo "missing-recipe")  `shouldReturn` missingRecipeResponse
+                try env (getRecipesInfo "missing-recipe") `shouldReturn` missingRecipeResponse
 
             it "Get the http-server recipe's info" $ \env ->
-                try env (getRecipesInfo "http-server")  `shouldReturn` httpserverRecipeResponse
+                try env (getRecipesInfo "http-server") `shouldReturn` httpserverRecipeResponse
 
             it "Get multiple recipe's info" $ \env ->
-                try env (getRecipesInfo "http-server,glusterfs")  `shouldReturn` multipleRecipeResponse
+                try env (getRecipesInfo "http-server,glusterfs") `shouldReturn` multipleRecipeResponse
 
             it "Get http-server recipe and missing-recipe info" $ \env ->
-                try env (getRecipesInfo "http-server,missing-recipe,glusterfs")  `shouldReturn` errorRecipeResponse
+                try env (getRecipesInfo "http-server,missing-recipe,glusterfs") `shouldReturn` errorRecipeResponse
+            it "Post a test recipe" $ \env ->
+                try env (postRecipesNew aTestRecipe) `shouldReturn` recipesNewResponse
 
             it "Get changes to http-server recipe" $ \env ->
                 try env recipesChangesTest1 `shouldReturn` True
