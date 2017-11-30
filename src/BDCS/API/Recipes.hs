@@ -522,7 +522,7 @@ commitRecipe repo branch recipe = do
 commitRecipeDirectory :: Git.Repository -> T.Text -> FilePath -> IO [Git.OId]
 commitRecipeDirectory repo branch directory = do
     branch_files <- listBranchFiles repo branch
-    files <- map (directory ++) . filter (skipFiles branch_files) <$> listDirectory directory
+    files <- map (directory </>) . filter (skipFiles branch_files) <$> listDirectory directory
     mapM (commitRecipeFile repo branch) files
   where
     skipFiles :: [T.Text] -> String -> Bool
