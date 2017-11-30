@@ -140,8 +140,8 @@ prepareCommit repo branch builder = do
 -- | Open a Git repository, or create the initial repository if one doesn't exist
 openOrCreateRepo :: FilePath -> IO Git.Repository
 openOrCreateRepo path = do
-    gfile <- fileNewForPath path
-    ifM (doesPathExist $ path ++ "/HEAD")
+    gfile <- fileNewForPath (path ++ "/git")
+    ifM (doesPathExist $ path ++ "/git/HEAD")
         (openRepo gfile)
         (createWithInitialCommit gfile)
   where
