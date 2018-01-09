@@ -1040,25 +1040,21 @@ recipesDepsolve pool repoLock branch recipe_names = liftIO $ RWL.withRead (gitRe
     depsolveRecipe :: T.Text -> [RecipeDependencies] ->  [RecipesAPIError] -> IO ([RecipeDependencies], [RecipesAPIError])
     depsolveRecipe recipe_name recipes_list errors_list = do
         result <- getRecipeInfo repoLock branch recipe_name
-        new_recipes_list <- new_recipes result
-        return (new_recipes_list, new_errors result)
-      where
-        new_errors :: Either String (Bool, Recipe) -> [RecipesAPIError]
-        new_errors (Left err) = RecipesAPIError recipe_name (T.pack err):errors_list
-        new_errors (Right _)  = errors_list
-
-        new_recipes :: Either String (Bool, Recipe) -> IO [RecipeDependencies]
-        new_recipes (Left _) = return recipes_list
-        new_recipes (Right (_, recipe)) = do
-            -- Make a list of the packages and modules (a set) and sort it by lowercase names
-            let projects_name_list = map T.pack $ getAllRecipeProjects recipe
-            -- depsolve this list
-            dep_nevras <- depsolveProjects pool projects_name_list
-            -- Make a list of the NEVRAs for the names in the step above (frozen list of packages)
-            -- NOTE It may not include everything, if the dependency is satisfied by a project with
-            --      a different name it will not be included in the list.
-            let project_nevras = getProjectNEVRAs projects_name_list dep_nevras
-            return $ RecipeDependencies recipe dep_nevras project_nevras:recipes_list
+        case result of
+            Left err          -> return (recipes_list, RecipesAPIError recipe_name (T.pack err):errors_list)
+            Right (_, recipe) -> do
+                -- Make a list of the packages and modules (a set) and sort it by lowercase names
+                let projects_name_list = map T.pack $ getAllRecipeProjects recipe
+                -- depsolve this list
+                dep_result <- depsolveProjects pool projects_name_list
+                case dep_result of
+                    Left err         -> return (recipes_list, RecipesAPIError recipe_name (T.pack err):errors_list)
+                    Right dep_nevras -> do
+                        -- Make a list of the NEVRAs for the names in the step above (frozen list of packages)
+                        -- NOTE It may not include everything, if the dependency is satisfied by a project with
+                        --      a different name it will not be included in the list.
+                        let project_nevras = getProjectNEVRAs projects_name_list dep_nevras
+                        return (RecipeDependencies recipe dep_nevras project_nevras:recipes_list, errors_list)
 
     -- Get the NEVRAs for all the projects used to feed the depsolve step
     getProjectNEVRAs :: [T.Text] -> [PackageNEVRA] -> [PackageNEVRA]
@@ -1119,12 +1115,15 @@ instance FromJSON ProjectsDepsolveResponse where
 projectsDepsolve :: ConnectionPool -> String -> Handler ProjectsDepsolveResponse
 projectsDepsolve pool project_names = do
         let project_name_list = map T.pack (argify [project_names])
-        project_deps <- liftIO $ depsolveProjects pool project_name_list
-        return $ ProjectsDepsolveResponse project_deps
+        result <- liftIO $ depsolveProjects pool project_name_list
+        -- TODO Properly report errors with a different response
+        case result of
+            Left _             -> return $ ProjectsDepsolveResponse []
+            Right project_deps -> return $ ProjectsDepsolveResponse project_deps
 
 -- | Depsolve a list of project names, returning a list of PackageNEVRA
 -- If there is an error it returns an empty list
-depsolveProjects :: ConnectionPool -> [T.Text] -> IO [PackageNEVRA]
+depsolveProjects :: ConnectionPool -> [T.Text] -> IO (Either String [PackageNEVRA])
 depsolveProjects pool project_name_list = do
     result <- runExceptT $ flip runSqlPool pool $ do
         -- XXX Need to properly deal with arches
@@ -1132,5 +1131,5 @@ depsolveProjects pool project_name_list = do
         solution <- solveCNF (formulaToCNF formula)
         mapMaybeM groupIdToNevra $ map fst $ filter snd solution
     case result of
-        Left  e           -> return []
-        Right assignments -> return $ map (mkPackageNEVRA . splitFilename) assignments
+        Left  e           -> return $ Left (show e)
+        Right assignments -> return $ Right (map (mkPackageNEVRA . splitFilename) assignments)
