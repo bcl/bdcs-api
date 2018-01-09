@@ -57,8 +57,8 @@ import qualified Control.Concurrent.ReadWriteLock as RWL
 import qualified Control.Exception as CE
 import           Control.Monad.Except
 import           Data.Aeson
-import           Data.List(sortBy)
-import           Data.Maybe(fromJust, fromMaybe)
+import           Data.List(find, sortBy)
+import           Data.Maybe(fromJust, fromMaybe, mapMaybe)
 import qualified Data.Text as T
 import           Database.Persist.Sql
 import           Data.GI.Base(GError(..))
@@ -132,6 +132,7 @@ type V0API = "package"  :> Capture "package" T.Text :> Get '[JSON] PackageInfo
                                   :> Capture "from_commit" String
                                   :> Capture "to_commit" String
                                   :> Get '[JSON] RecipesDiffResponse
+        :<|> "recipes"  :> "depsolve" :> Capture "recipes" String :> Get '[JSON] RecipesDepsolveResponse
 
 -- | Connect the V0API type to all of the handlers
 v0ApiServer :: GitLock -> ConnectionPool -> Server V0API
@@ -147,6 +148,7 @@ v0ApiServer repoLock pool = pkgInfoH
                        :<|> recipesWorkspaceH
                        :<|> recipesTagH
                        :<|> recipesDiffH
+                       :<|> recipesDepsolveH
   where
     pkgInfoH package     = liftIO $ packageInfo pool package
     projectsDepsolveH projects = projectsDepsolve pool projects
@@ -160,6 +162,7 @@ v0ApiServer repoLock pool = pkgInfoH
     recipesWorkspaceH recipe   = recipesWorkspace repoLock "master" recipe
     recipesTagH recipe   = recipesTag repoLock "master" recipe
     recipesDiffH recipe from_commit to_commit = recipesDiff repoLock "master" recipe from_commit to_commit
+    recipesDepsolveH recipes = recipesDepsolve pool repoLock "master" recipes
 
 -- | Example of getting package info from the sqlite database
 packageInfo :: ConnectionPool -> T.Text -> IO PackageInfo
@@ -868,9 +871,200 @@ recipesDiff repoLock branch recipe_name from_commit to_commit = liftIO $ RWL.wit
                    [CE.Handler (\(e :: GitError) -> return $ Left (show e)),
                     CE.Handler (\(e :: GError) -> return $ Left (show e))]
 
--- | * `/api/v0/recipes/depsolve/<recipes>`
--- |  - Return the recipe and summary information about all of its modules and packages.
--- |  - [Example JSON](fn.recipes_depsolve.html#examples)
+
+-- | The recipe's dependency details
+data RecipeDependencies = RecipeDependencies {
+    rdRecipe       :: Recipe,
+    rdDependencies :: [PackageNEVRA],
+    rdModules      :: [PackageNEVRA]
+} deriving (Show, Eq)
+
+instance ToJSON RecipeDependencies where
+  toJSON RecipeDependencies{..} = object [
+      "recipe"       .= rdRecipe
+    , "dependencies" .= rdDependencies
+    , "modules"      .= rdModules ]
+
+instance FromJSON RecipeDependencies where
+  parseJSON = withObject "recipe dependencies" $ \o -> do
+    rdRecipe       <- o .: "recipe"
+    rdDependencies <- o .: "dependencies"
+    rdModules      <- o .: "modules"
+    return RecipeDependencies{..}
+
+
+-- | The JSON response for /recipes/depsolve/<recipes>
+data RecipesDepsolveResponse = RecipesDepsolveResponse {
+    rdrRecipes  :: [RecipeDependencies],                             -- ^ List of recipes and their dependencies
+    rdrErrors   :: [RecipesAPIError]                                 -- ^ Errors reading the recipe
+} deriving (Show, Eq)
+
+instance ToJSON RecipesDepsolveResponse where
+  toJSON RecipesDepsolveResponse{..} = object [
+      "recipes" .= rdrRecipes
+    , "errors"  .= rdrErrors ]
+
+instance FromJSON RecipesDepsolveResponse where
+  parseJSON = withObject "/recipes/depsolve response" $ \o -> do
+    rdrRecipes <- o .: "recipes"
+    rdrErrors  <- o .: "errors"
+    return RecipesDepsolveResponse{..}
+
+-- | /api/v0/recipes/depsolve/<recipes>
+-- Return the recipe and summary information about all of its modules and packages.
+--
+-- [@pool@]: The sqlite connection pool object
+-- [@repoLock@]: The git repositories `ReadWriteLock` and Repository object
+-- [@branch@]: The branch name
+-- [@recipe_names@]: The recipe names to depsolve, comma-separated if there is more than one
+--
+-- If a workspace version of the recipe is found it will be used for the depsolve. If there are
+-- any errors reading the recipe, or depsolving it, they will be returned in the 'errors' object.
+--
+-- # Error example
+--
+-- > {
+-- >     "errors": [
+-- >         {
+-- >             "msg": "nfs-server.toml is not present on branch master",
+-- >             "recipe": "nfs-server"
+-- >         }
+-- >     ],
+-- >     "recipes": []
+-- > }
+--
+--
+-- A successful result will include 3 items. 'dependencies' will be the NEVRAs of all of the
+-- projects needed to satisfy the recipe's dependencies. 'modules' will be the project NEVRAs
+-- for the modules and packages explicitly listed in the recipe, and 'recipe' will be a copy of
+-- the recipe that was depsolved.
+--
+-- # Abbreviated successful example
+--
+-- > {
+-- >     "errors": [],
+-- >     "recipes": [
+-- >         {
+-- >             "dependencies": [
+-- >                 {
+-- >                     "arch": "x86_64",
+-- >                     "epoch": "0",
+-- >                     "name": "apr",
+-- >                     "release": "3.el7",
+-- >                     "version": "1.4.8"
+-- >                 },
+-- >                 {
+-- >                     "arch": "x86_64",
+-- >                     "epoch": "0",
+-- >                     "name": "apr-util",
+-- >                     "release": "6.el7",
+-- >                     "version": "1.5.2"
+-- >                 },
+-- >                 ...
+-- >             ],
+-- >             "modules": [
+-- >                 {
+-- >                     "arch": "x86_64",
+-- >                     "epoch": "0",
+-- >                     "name": "httpd",
+-- >                     "release": "67.el7",
+-- >                     "version": "2.4.6"
+-- >                 },
+-- >                 {
+-- >                     "arch": "x86_64",
+-- >                     "epoch": "0",
+-- >                     "name": "mod_auth_kerb",
+-- >                     "release": "28.el7",
+-- >                     "version": "5.4"
+-- >                 },
+-- >                 ...
+-- >             ],
+-- >            "recipe": {
+-- >                 "description": "An example http server with PHP and MySQL support.",
+-- >                 "modules": [
+-- >                     {
+-- >                         "name": "httpd",
+-- >                         "version": "2.4.*"
+-- >                     },
+-- >                     {
+-- >                         "name": "mod_auth_kerb",
+-- >                         "version": "5.4"
+-- >                     },
+-- >                     {
+-- >                         "name": "mod_ssl",
+-- >                         "version": "2.4.*"
+-- >                     },
+-- >                     {
+-- >                         "name": "php",
+-- >                         "version": "5.4.*"
+-- >                     },
+-- >                     {
+-- >                         "name": "php-mysql",
+-- >                         "version": "5.4.*"
+-- >                     }
+-- >                 ],
+-- >                 "name": "http-server",
+-- >                 "packages": [
+-- >                     {
+-- >                         "name": "tmux",
+-- >                         "version": "2.2"
+-- >                     },
+-- >                     {
+-- >                         "name": "openssh-server",
+-- >                         "version": "6.6.*"
+-- >                     },
+-- >                     {
+-- >                         "name": "rsync",
+-- >                         "version": "3.0.*"
+-- >                     }
+-- >                 ],
+-- >                 "version": "0.2.0"
+-- >             }
+-- >         }
+-- >     ]
+-- > }
+recipesDepsolve :: ConnectionPool -> GitLock -> T.Text -> String -> Handler RecipesDepsolveResponse
+recipesDepsolve pool repoLock branch recipe_names = liftIO $ RWL.withRead (gitRepoLock repoLock) $ do
+    let recipe_name_list = map T.pack (argify [recipe_names])
+    (recipes, errors) <- liftIO $ allRecipeDeps recipe_name_list [] []
+    return $ RecipesDepsolveResponse recipes errors
+  where
+    allRecipeDeps :: [T.Text] -> [RecipeDependencies] ->  [RecipesAPIError] -> IO ([RecipeDependencies], [RecipesAPIError])
+    allRecipeDeps [] _ _ = return ([], [])
+    allRecipeDeps [recipe_name] recipes_list errors_list =
+                  depsolveRecipe recipe_name recipes_list errors_list
+    allRecipeDeps (recipe_name:xs) recipes_list errors_list = do
+                  (new_recipes, new_errors) <- depsolveRecipe recipe_name recipes_list errors_list
+                  allRecipeDeps xs new_recipes new_errors
+
+    depsolveRecipe :: T.Text -> [RecipeDependencies] ->  [RecipesAPIError] -> IO ([RecipeDependencies], [RecipesAPIError])
+    depsolveRecipe recipe_name recipes_list errors_list = do
+        result <- getRecipeInfo repoLock branch recipe_name
+        new_recipes_list <- new_recipes result
+        return (new_recipes_list, new_errors result)
+      where
+        new_errors :: Either String (Bool, Recipe) -> [RecipesAPIError]
+        new_errors (Left err) = RecipesAPIError recipe_name (T.pack err):errors_list
+        new_errors (Right _)  = errors_list
+
+        new_recipes :: Either String (Bool, Recipe) -> IO [RecipeDependencies]
+        new_recipes (Left _) = return recipes_list
+        new_recipes (Right (_, recipe)) = do
+            -- Make a list of the packages and modules (a set) and sort it by lowercase names
+            let projects_name_list = map T.pack $ getAllRecipeProjects recipe
+            -- depsolve this list
+            dep_nevras <- depsolveProjects pool projects_name_list
+            -- Make a list of the NEVRAs for the names in the step above (frozen list of packages)
+            -- NOTE It may not include everything, if the dependency is satisfied by a project with
+            --      a different name it will not be included in the list.
+            let project_nevras = getProjectNEVRAs projects_name_list dep_nevras
+            return $ RecipeDependencies recipe dep_nevras project_nevras:recipes_list
+
+    -- Get the NEVRAs for all the projects used to feed the depsolve step
+    getProjectNEVRAs :: [T.Text] -> [PackageNEVRA] -> [PackageNEVRA]
+    getProjectNEVRAs project_names all_nevras = mapMaybe lookupProject project_names
+      where
+        lookupProject project_name = find (\e -> pnName e == project_name) all_nevras
 
 -- | * `/api/v0/recipes/freeze/<recipes>`
 -- |  - Return the contents of the recipe with frozen dependencies instead of expressions.
