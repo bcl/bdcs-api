@@ -133,6 +133,7 @@ type V0API = "package"  :> Capture "package" T.Text :> Get '[JSON] PackageInfo
                                   :> Capture "to_commit" String
                                   :> Get '[JSON] RecipesDiffResponse
         :<|> "recipes"  :> "depsolve" :> Capture "recipes" String :> Get '[JSON] RecipesDepsolveResponse
+        :<|> "recipes"  :> "freeze" :> Capture "recipes" String :> Get '[JSON] RecipesFreezeResponse
 
 -- | Connect the V0API type to all of the handlers
 v0ApiServer :: GitLock -> ConnectionPool -> Server V0API
@@ -149,6 +150,7 @@ v0ApiServer repoLock pool = pkgInfoH
                        :<|> recipesTagH
                        :<|> recipesDiffH
                        :<|> recipesDepsolveH
+                       :<|> recipesFreezeH
   where
     pkgInfoH package     = liftIO $ packageInfo pool package
     projectsDepsolveH projects = projectsDepsolve pool projects
@@ -163,6 +165,7 @@ v0ApiServer repoLock pool = pkgInfoH
     recipesTagH recipe   = recipesTag repoLock "master" recipe
     recipesDiffH recipe from_commit to_commit = recipesDiff repoLock "master" recipe from_commit to_commit
     recipesDepsolveH recipes = recipesDepsolve pool repoLock "master" recipes
+    recipesFreezeH recipes = recipesFreeze pool repoLock "master" recipes
 
 -- | Example of getting package info from the sqlite database
 packageInfo :: ConnectionPool -> T.Text -> IO PackageInfo
@@ -1062,9 +1065,140 @@ recipesDepsolve pool repoLock branch recipe_names = liftIO $ RWL.withRead (gitRe
       where
         lookupProject project_name = find (\e -> pnName e == project_name) all_nevras
 
--- | * `/api/v0/recipes/freeze/<recipes>`
--- |  - Return the contents of the recipe with frozen dependencies instead of expressions.
--- |  - [Example JSON](fn.recipes_freeze.html#examples)
+
+-- | The JSON response for /recipes/freeze/<recipes>
+data RecipesFreezeResponse = RecipesFreezeResponse {
+    rfrRecipes  :: [Recipe],                                         -- ^ Recipes with exact versions
+    rfrErrors   :: [RecipesAPIError]                                 -- ^ Errors reading the recipe
+} deriving (Show, Eq)
+
+instance ToJSON RecipesFreezeResponse where
+  toJSON RecipesFreezeResponse{..} = object [
+      "recipes" .= rfrRecipes
+    , "errors"  .= rfrErrors ]
+
+instance FromJSON RecipesFreezeResponse where
+  parseJSON = withObject "/recipes/freeze response" $ \o -> do
+    rfrRecipes <- o .: "recipes"
+    rfrErrors  <- o .: "errors"
+    return RecipesFreezeResponse{..}
+
+-- | /api/v0/recipes/freeze/<recipes>
+-- Return the contents of the recipe with frozen dependencies instead of expressions.
+--
+-- This depsolves the recipe, and then replaces the modules and packages versions with
+-- the EVR found by the depsolve, returning a frozen recipe.
+--
+-- # Examples
+--
+-- > {
+-- >     "errors": [],
+-- >     "recipes": [
+-- >         {
+-- >             "description": "An example http server with PHP and MySQL support.",
+-- >             "modules": [
+-- >                 {
+-- >                     "name": "httpd",
+-- >                     "version": "2.4.6-67.el7"
+-- >                 },
+-- >                 {
+-- >                     "name": "mod_auth_kerb",
+-- >                     "version": "5.4-28.el7"
+-- >                 },
+-- >                 {
+-- >                     "name": "mod_ssl",
+-- >                     "version": "1:2.4.6-67.el7"
+-- >                 },
+-- >                 {
+-- >                     "name": "php",
+-- >                     "version": "5.4.16-42.el7"
+-- >                 },
+-- >                 {
+-- >                     "name": "php-mysql",
+-- >                     "version": "5.4.16-42.el7"
+-- >                 }
+-- >             ],
+-- >             "name": "http-server",
+-- >             "packages": [
+-- >                 {
+-- >                     "name": "tmux",
+-- >                     "version": "1.8-4.el7"
+-- >                 },
+-- >                 {
+-- >                     "name": "openssh-server",
+-- >                     "version": "7.4p1-11.el7"
+-- >                 },
+-- >                 {
+-- >                     "name": "rsync",
+-- >                     "version": "3.0.9-18.el7"
+-- >                 }
+-- >             ],
+-- >             "version": "0.2.0"
+-- >         }
+-- >     ]
+-- > }
+recipesFreeze :: ConnectionPool -> GitLock -> T.Text -> String -> Handler RecipesFreezeResponse
+recipesFreeze pool repoLock branch recipe_names = liftIO $ RWL.withRead (gitRepoLock repoLock) $ do
+    let recipe_name_list = map T.pack (argify [recipe_names])
+    (recipes, errors) <- liftIO $ allRecipeDeps recipe_name_list [] []
+    return $ RecipesFreezeResponse recipes errors
+  where
+    allRecipeDeps :: [T.Text] -> [Recipe] ->  [RecipesAPIError] -> IO ([Recipe], [RecipesAPIError])
+    allRecipeDeps [] _ _ = return ([], [])
+    allRecipeDeps [recipe_name] recipes_list errors_list =
+                  depsolveRecipe recipe_name recipes_list errors_list
+    allRecipeDeps (recipe_name:xs) recipes_list errors_list = do
+                  (new_recipes, new_errors) <- depsolveRecipe recipe_name recipes_list errors_list
+                  allRecipeDeps xs new_recipes new_errors
+
+    depsolveRecipe :: T.Text -> [Recipe] ->  [RecipesAPIError] -> IO ([Recipe], [RecipesAPIError])
+    depsolveRecipe recipe_name recipes_list errors_list = do
+        result <- getRecipeInfo repoLock branch recipe_name
+        case result of
+            Left err          -> return (recipes_list, RecipesAPIError recipe_name (T.pack err):errors_list)
+            Right (_, recipe) -> do
+                -- Make a list of the packages and modules (a set) and sort it by lowercase names
+                let projects_name_list = map T.pack $ getAllRecipeProjects recipe
+                -- depsolve this list
+                dep_result <- depsolveProjects pool projects_name_list
+                case dep_result of
+                    Left err         -> return (recipes_list, RecipesAPIError recipe_name (T.pack err):errors_list)
+                    Right dep_nevras -> return (frozenRecipe recipe dep_nevras:recipes_list, errors_list)
+
+    -- Replace the recipe's module and package versions with the EVR selected by depsolving
+    frozenRecipe :: Recipe -> [PackageNEVRA] -> Recipe
+    frozenRecipe recipe dep_nevras = do
+        let new_modules = getFrozenModules (rModules recipe) dep_nevras
+        let new_packages= getFrozenModules (rPackages recipe) dep_nevras
+        recipe { rModules = new_modules, rPackages = new_packages }
+
+    -- Get a frozen list of projects using the depsolved NEVRAs
+    getFrozenModules :: [RecipeModule] -> [PackageNEVRA] -> [RecipeModule]
+    getFrozenModules recipe_modules all_nevras = mapMaybe (getFrozenRecipeModule all_nevras) recipe_modules
+
+    getFrozenRecipeModule :: [PackageNEVRA] -> RecipeModule -> Maybe RecipeModule
+    getFrozenRecipeModule all_nevras recipe_module = do
+        let result = lookupRecipeModule recipe_module all_nevras
+        case result of
+            Nothing           -> Nothing
+            Just module_nevra -> Just $ frozenRecipeModule recipe_module module_nevra
+
+    -- Lookup a RecipeModule in the list of depsolved packages
+    lookupRecipeModule :: RecipeModule -> [PackageNEVRA] -> Maybe PackageNEVRA
+    lookupRecipeModule recipe_module all_nevras = find (\e -> pnName e == T.pack (rmName recipe_module)) all_nevras
+
+    -- Create a new RecipeModule with frozen version
+    frozenRecipeModule :: RecipeModule -> PackageNEVRA -> RecipeModule
+    frozenRecipeModule rm pn = rm { rmVersion = getVersionFromNEVRA pn }
+
+    -- Convert a PackageNEVRA to a string for RecipeModule
+    -- eg. 2:3.1.4-22.fc27
+    getVersionFromNEVRA :: PackageNEVRA -> String
+    getVersionFromNEVRA nevra = T.unpack $ T.concat [epoch $ pnEpoch nevra, pnVersion nevra, "-", pnRelease nevra]
+      where
+        epoch (Just e) = e `T.append` ":"
+        epoch Nothing  = ""
+
 
 -- | Package build details
 data PackageNEVRA = PackageNEVRA {
