@@ -4,6 +4,5 @@ dist
 .*.swp
 *.tix
 *.sql
-*.db
 *.pyc
 *.tar

@@ -993,9 +993,9 @@ testRecipe =
     }
 
 testFiles :: [T.Text]
-testFiles  = ["glusterfs.toml","http-server.toml","kubernetes.toml","test-server.toml"]
+testFiles  = ["glusterfs.toml","http-server.toml","kubernetes.toml","test-fake.toml","test-server.toml"]
 testFiles2 :: [T.Text]
-testFiles2 = ["glusterfs.toml","kubernetes.toml","test-server.toml"]
+testFiles2 = ["glusterfs.toml","kubernetes.toml","test-fake.toml","test-server.toml"]
 
 data TestError =
     FileListError [T.Text]

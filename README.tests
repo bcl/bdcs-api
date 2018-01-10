@@ -1,0 +1,23 @@
+bdcs-api testing
+================
+
+The depsolve part of the ServerSpec.hs test requires a metadata.db with packages. We ship a
+test database in ./tests/mddb/metadata.db along with the fake rpms used to create it.
+
+From time to time the test metadata.db may need to be regenerated. This will usually happen
+when bdcs has changed the database schema. This is currently a manual process because the
+schema.sql file is only shipped with the bdcs source, not installed anywhere.
+
+ * rm ./tests/mddb/metadata.db
+ * sqlite3 ./tests/mddb/metadata.db < /PATH/TO/schema.sql
+ * for f in ./tests/mddb/*rpm; do /PATH/TO/bdcs-import ${PWD}/tests/mddb/metadata.db /tmp/cs.repo file://${f}; done
+ * rm -rf /tmp/cs.repo
+
+You can then commit the updated metadata.db into git.
+
+The fake rpms used for the tests shouldn't need to be re-generated, but if they are you can do that by
+installing rpmfluff (python3-rpmfluff if you are running Fedora) and running:
+
+python3 ./tests/mkTestRPMs.py
+
+And then committing the new rpms to git.

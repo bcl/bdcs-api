@@ -46,7 +46,7 @@ import           Test.Hspec
 -- Client API
 getStatus :: ClientM ServerStatus
 getPackage :: T.Text -> ClientM PackageInfo
-getDeps :: T.Text -> ClientM [T.Text]
+getProjectsDepsolve :: String -> ClientM ProjectsDepsolveResponse
 getErr :: ClientM [T.Text]
 getRecipes :: Maybe Int -> Maybe Int -> ClientM RecipesListResponse
 getRecipesInfo :: String -> ClientM RecipesInfoResponse
@@ -57,18 +57,21 @@ postRecipesUndo :: String -> String -> ClientM RecipesStatusResponse
 postRecipesWorkspace :: Recipe -> ClientM RecipesStatusResponse
 postRecipesTag :: String -> ClientM RecipesStatusResponse
 getRecipesDiff :: String -> String -> String -> ClientM RecipesDiffResponse
-getStatus :<|> getPackage :<|> getDeps :<|> getErr
+getRecipesDepsolve :: String -> ClientM RecipesDepsolveResponse
+getRecipesFreeze :: String -> ClientM RecipesFreezeResponse
+getStatus :<|> getPackage :<|> getProjectsDepsolve :<|> getErr
           :<|> getRecipes :<|> getRecipesInfo :<|> getRecipesChanges
           :<|> postRecipesNew :<|> deleteRecipes :<|> postRecipesUndo
-          :<|> postRecipesWorkspace :<|> postRecipesTag :<|> getRecipesDiff = client proxyAPI
+          :<|> postRecipesWorkspace :<|> postRecipesTag :<|> getRecipesDiff
+          :<|> getRecipesDepsolve :<|> getRecipesFreeze = client proxyAPI
 
 
 -- Test results, depends on the contents of the ./tests/recipes files.
 recipesListResponse1 :: RecipesListResponse
-recipesListResponse1 = RecipesListResponse ["glusterfs", "http-server", "kubernetes"] 0 20 3
+recipesListResponse1 = RecipesListResponse ["glusterfs", "http-server", "kubernetes", "test-fake"] 0 20 4
 
 recipesListResponse2 :: RecipesListResponse
-recipesListResponse2 = RecipesListResponse ["http-server"] 1 1 3
+recipesListResponse2 = RecipesListResponse ["http-server"] 1 1 4
 
 missingRecipeResponse :: RecipesInfoResponse
 missingRecipeResponse = RecipesInfoResponse [] [] [RecipesAPIError "missing-recipe" "missing-recipe.toml is not present on branch master"]
@@ -135,6 +138,43 @@ aTestRecipe :: Recipe
 aTestRecipe = Recipe "A Test Recipe" (Just "0.0.1") "A simple recipe to use for testing"
                      [RecipeModule "rsync" "3.0.*"]
                      [RecipeModule "httpd" "2.4.*"]
+
+recipesDepsolveResponse1 :: RecipesDepsolveResponse
+recipesDepsolveResponse1 =
+    RecipesDepsolveResponse [RecipeDependencies (Recipe "test-fake" (Just "0.0.1")  "A test recipe that uses the fake rpms"
+                                                  [RecipeModule "bdcs-fake-lisa""1.0.*"]
+                                                  [RecipeModule "bdcs-fake-bart" "1.3.*"])
+                                                [PackageNEVRA "bdcs-fake-bart" (Just "0") "1.3.1" "12" "x86_64",
+                                                 PackageNEVRA "bdcs-fake-homer" (Just "0") "2.0.1" "4" "x86_64",
+                                                 PackageNEVRA "bdcs-fake-lisa" (Just "3") "1.0.0" "1" "x86_64",
+                                                 PackageNEVRA "bdcs-fake-sax" (Just "0") "3.8.1" "1" "x86_64"]
+                                                [PackageNEVRA "bdcs-fake-bart" (Just "0") "1.3.1" "12" "x86_64",
+                                                 PackageNEVRA "bdcs-fake-lisa" (Just "3") "1.0.0" "1" "x86_64"]]
+                            []
+
+recipesDepsolveResponse2 :: RecipesDepsolveResponse
+recipesDepsolveResponse2 =
+    RecipesDepsolveResponse [] [RecipesAPIError "unknown-recipe" "unknown-recipe.toml is not present on branch master"]
+
+recipesFreezeResponse1 :: RecipesFreezeResponse
+recipesFreezeResponse1 =
+    RecipesFreezeResponse [Recipe "test-fake" (Just "0.0.1") "A test recipe that uses the fake rpms"
+                            [RecipeModule "bdcs-fake-lisa" "3:1.0.0-1"]
+                            [RecipeModule "bdcs-fake-bart" "1.3.1-12"]]
+                          []
+
+recipesFreezeResponse2 :: RecipesFreezeResponse
+recipesFreezeResponse2 =
+    RecipesFreezeResponse [] [RecipesAPIError "unknown-recipe" "unknown-recipe.toml is not present on branch master"]
+
+projectsDepsolveResponse1 :: ProjectsDepsolveResponse
+projectsDepsolveResponse1 =
+    ProjectsDepsolveResponse [PackageNEVRA "bdcs-fake-lisa" (Just "3") "1.0.0" "1" "x86_64",
+                              PackageNEVRA "bdcs-fake-sax" (Just "0") "3.8.1" "1" "x86_64"]
+
+projectsDepsolveResponse2 :: ProjectsDepsolveResponse
+projectsDepsolveResponse2 =
+    ProjectsDepsolveResponse []
 
 -- Post 10 changes to the test recipe
 postMultipleChanges :: ClientM Bool
@@ -308,9 +348,12 @@ setupTempRepoDir exampleRecipes gitRepoPath = do
 
 spec :: Spec
 spec = do
-    describe "Setup" $
+    describe "Setup" $ do
         it "Setup the temporary test directory" $
             setupTempRepoDir "./tests/recipes/" "/var/tmp/bdcs-tmp-recipes/"
+
+        it "Copy the test database to /var/tmp/test-bdcs.db" $
+            copyFileWithMetadata "./tests/mddb/metadata.db" "/var/tmp/test-bdcs.db"
 
     describe "/api" $
         -- NOTE that mkApp is executed for EACH of the 'it' sections
@@ -364,6 +407,24 @@ spec = do
 
             it "Get the recipe differences" $ \env ->
                 try env recipesDiffTest `shouldReturn` True
+
+            it "Depsolve the test-fake recipe" $ \env ->
+                try env (getRecipesDepsolve "test-fake") `shouldReturn` recipesDepsolveResponse1
+
+            it "Depsolve an unknown recipe" $ \env ->
+                try env (getRecipesDepsolve "unknown-recipe") `shouldReturn` recipesDepsolveResponse2
+
+            it "Get a frozen test-fake recipe" $ \env ->
+                try env (getRecipesFreeze "test-fake") `shouldReturn` recipesFreezeResponse1
+
+            it "Freeze an unknown recipe" $ \env ->
+                try env (getRecipesFreeze "unknown-recipe") `shouldReturn` recipesFreezeResponse2
+
+            it "Depsolve a test package" $ \env ->
+                try env (getProjectsDepsolve "bdcs-fake-lisa") `shouldReturn` projectsDepsolveResponse1
+
+            it "Depsolve an unknown package" $ \env ->
+                try env (getProjectsDepsolve "unknown-recipe") `shouldReturn` projectsDepsolveResponse2
 
 --    describe "cleanup" $
 --        it "Remove the temporary directory" $

@@ -1,0 +1,11 @@
+name = "test-fake"
+version = "0.0.1"
+description = "A test recipe that uses the fake rpms"
+
+[[modules]]
+name = "bdcs-fake-bart"
+version = "1.3.*"
+
+[[packages]]
+name = "bdcs-fake-lisa"
+version = "1.0.*"

@@ -28,13 +28,18 @@
 {-| API v0 routes
 -}
 module BDCS.API.V0(PackageInfo(..),
+               PackageNEVRA(..),
+               ProjectsDepsolveResponse(..),
                RecipesListResponse(..),
                RecipesInfoResponse(..),
                RecipesChangesResponse(..),
                RecipesDiffResponse(..),
+               RecipesDepsolveResponse(..),
+               RecipesFreezeResponse(..),
                RecipesStatusResponse(..),
                RecipesAPIError(..),
                RecipeChanges(..),
+               RecipeDependencies(..),
                WorkspaceChanges(..),
                V0API,
                v0ApiServer)
