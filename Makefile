@@ -31,9 +31,14 @@ tests: sandbox
 	cabal build
 	cabal test --show-details=always
 
-ci:
-	sudo docker build -t welder/bdcs-api -f Dockerfile.build .
-	sudo docker run --rm --security-opt label=disable -v `pwd`:/bdcs-api/ welder/bdcs-api
+build-and-test: Dockerfile.build
+	sudo docker build -t welder/bdcs-api-build-img -f $< .
+	sudo docker run --rm --security-opt label=disable -v `pwd`:/bdcs-api/ welder/bdcs-api-build-img
+
+bdcs-api-img: build-and-test
+	sudo docker build -t welder/bdcs-api-img .
+
+ci: build-and-test
 
 ci_after_success:
 	sudo docker run --rm --security-opt label=disable -v `pwd`:/bdcs-api/ \
