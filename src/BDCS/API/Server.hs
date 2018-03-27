@@ -44,6 +44,7 @@ import           Control.Concurrent.STM.TChan(newTChan, tryReadTChan)
 import           Control.Concurrent.STM.TMVar(putTMVar)
 import           Control.Conditional(whenM)
 import           Control.Monad(forever, void)
+import           Control.Monad.IO.Class(liftIO)
 import           Control.Monad.Logger(runStderrLoggingT)
 import           Control.Monad.STM(atomically)
 import           Data.Aeson
@@ -85,7 +86,6 @@ instance FromJSON ServerStatus where
 -- | The /status route
 type CommonAPI = "status" :> Get '[JSON] ServerStatus
 
-
 serverStatus :: Handler ServerStatus
 serverStatus = return (ServerStatus "0.0.0" "0" "0" False)
 
@@ -116,7 +116,6 @@ proxyAPI = Proxy
 
 app :: ServerConfig -> Application
 app cfg = appCors
-        $ provideOptions proxyAPI
         $ serve proxyAPI
         $ combinedServer cfg
 
@@ -141,7 +140,7 @@ mkApp bdcsPath gitRepoPath sqliteDbPath = do
                              cfgWorkQ = q,
                              cfgPool = pool,
                              cfgBdcs = bdcsPath,
-                             cfgResultsDir = "/var/lib/composer" }
+                             cfgResultsDir = "/var/tmp/composer" }
 
     createDirectoryIfMissing True (cfgResultsDir cfg)
 

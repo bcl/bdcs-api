@@ -28,6 +28,7 @@ import           BDCS.DB(Projects(..))
 import           Control.Conditional(whenM)
 import           Control.Exception(throwIO)
 import           Control.Monad.Loops(allM)
+import qualified Data.ByteString.Lazy as BSL
 import           Data.List(isSuffixOf)
 import qualified Data.Text as T
 import           Data.Time.Clock(UTCTime)
@@ -71,13 +72,14 @@ getComposeTypes :: ClientM ComposeTypesResponse
 getComposeQueue :: ClientM ComposeQueueResponse
 getComposeQueueFinished :: ClientM ComposeFinishedResponse
 getComposeQueueFailed :: ClientM ComposeFailedResponse
+getFileTest :: ClientM BSL.ByteString
 getStatus :<|> getProjectsList :<|> getProjectsInfo :<|> getProjectsDepsolve :<|> getErr
           :<|> getRecipes :<|> getRecipesInfo :<|> getRecipesChanges
           :<|> postRecipesNew :<|> deleteRecipes :<|> postRecipesUndo
           :<|> postRecipesWorkspace :<|> deleteRecipesWorkspace :<|> postRecipesTag :<|> getRecipesDiff
           :<|> getRecipesDepsolve :<|> getRecipesFreeze :<|> getModulesList
           :<|> getModulesList' :<|> getCompose :<|> getComposeTypes :<|> getComposeQueue
-          :<|> getComposeQueueFinished :<|> getComposeQueueFailed = client proxyAPI
+          :<|> getComposeQueueFinished :<|> getComposeQueueFailed :<|> getFileTest = client proxyAPI
 
 
 -- Test results, depends on the contents of the ./tests/recipes files.

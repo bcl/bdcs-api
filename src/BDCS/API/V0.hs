@@ -87,6 +87,7 @@ import qualified Control.Exception as CE
 import           Control.Monad.STM(atomically)
 import           Control.Monad.Except
 import           Data.Aeson
+import qualified Data.ByteString.Lazy as BSL
 import           Data.Either(rights)
 import           Data.IORef(atomicModifyIORef')
 import           Data.List(find, sortBy)
@@ -198,6 +199,7 @@ type V0API = "projects" :> "list" :> QueryParam "offset" Int
         :<|> "compose"  :> "queue" :> Get '[JSON] ComposeQueueResponse
         :<|> "compose"  :> "finished" :> Get '[JSON] ComposeFinishedResponse
         :<|> "compose"  :> "failed" :> Get '[JSON] ComposeFailedResponse
+        :<|> "compose"  :> "file" :> Get '[OctetStream] BSL.ByteString
 
 -- | Connect the V0API type to all of the handlers
 v0ApiServer :: ServerConfig -> Server V0API
@@ -224,6 +226,7 @@ v0ApiServer cfg = projectsListH
              :<|> composeQueueH
              :<|> composeFinishedH
              :<|> composeFailedH
+             :<|> returnFileTest
   where
     projectsListH offset limit                       = projectsList cfg offset limit
     projectsInfoH project_names                      = projectsInfo cfg project_names
@@ -1935,3 +1938,6 @@ composeQueueFailed :: ServerConfig -> Handler ComposeFailedResponse
 composeQueueFailed ServerConfig{..} = do
     results <- liftIO $ getComposesWithStatus cfgResultsDir "FAILED"
     return $ ComposeFailedResponse results
+
+returnFileTest :: Handler BSL.ByteString
+returnFileTest = liftIO $ BSL.readFile "/working/test.iso"
