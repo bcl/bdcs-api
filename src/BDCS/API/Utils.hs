@@ -21,6 +21,7 @@
 module BDCS.API.Utils(applyLimits,
                       argify,
                       caseInsensitive,
+                      caseInsensitiveT,
                       GitLock(..),
                       maybeIO,
                       maybeThrow)
@@ -61,6 +62,12 @@ argify xs = filter (/= "") $ concatMap (splitOn ",") xs
 -- Takes into account unicode
 caseInsensitive :: String -> String -> Ordering
 caseInsensitive a b = T.toCaseFold (T.pack a) `compare` T.toCaseFold (T.pack b)
+
+-- | Compare 2 T.Text's case-insensitively
+--
+-- Takes into account unicode
+caseInsensitiveT :: T.Text -> T.Text -> Ordering
+caseInsensitiveT a b = T.toCaseFold a `compare` T.toCaseFold b
 
 -- | Apply limit and offset to a list.
 applyLimits :: Int -> Int -> [a] -> [a]
