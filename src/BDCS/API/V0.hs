@@ -70,16 +70,16 @@ import           BDCS.API.QueueStatus(QueueStatus(..), queueStatusEnded, queueSt
 import           BDCS.API.Recipe
 import           BDCS.API.Recipes
 import           BDCS.API.TOMLMediaType
-import           BDCS.API.Utils(GitLock(..), applyLimits, argify, caseInsensitive)
+import           BDCS.API.Utils(GitLock(..), applyLimits, argify, caseInsensitive, caseInsensitiveT)
 import           BDCS.API.Workspace
 import           BDCS.DB
 import           BDCS.Builds(findBuilds, getBuild)
 import           BDCS.Export.Utils(supportedOutputs)
-import           BDCS.Groups(groups)
+import           BDCS.Groups(getGroupsLike)
 import           BDCS.Projects(findProject, getProject, projects)
 import           BDCS.Sources(findSources, getSource)
 import           BDCS.Utils.Either(maybeToEither)
-import           BDCS.Utils.Monad(mapMaybeM)
+import           BDCS.Utils.Monad(concatMapM, mapMaybeM)
 import qualified Codec.Archive.Tar as Tar
 import qualified Control.Concurrent.ReadWriteLock as RWL
 import           Control.Concurrent.STM.TChan(writeTChan)
@@ -91,8 +91,10 @@ import           Data.Aeson
 import           Data.Bifunctor(bimap)
 import qualified Data.ByteString.Lazy as LBS
 import           Data.Either(partitionEithers, rights)
+import           Data.Int(Int64)
 import           Data.IORef(atomicModifyIORef')
 import           Data.List(find, sortBy)
+import           Data.List.Extra(nubOrd)
 import           Data.Maybe(fromMaybe, mapMaybe)
 import           Data.String(IsString)
 import           Data.String.Conversions(cs)
@@ -259,8 +261,8 @@ v0ApiServer cfg = projectsListH
     recipesDiffH recipe from_commit to_commit branch = recipesDiff cfg branch recipe from_commit to_commit
     recipesDepsolveH recipes branch                  = recipesDepsolve cfg branch recipes
     recipesFreezeH recipes branch                    = recipesFreeze cfg branch recipes
-    modulesListH offset limit                        = modulesList cfg offset limit []
-    modulesListFilteredH module_names offset limit   = modulesList cfg offset limit (T.splitOn "," $ cs module_names)
+    modulesListH offset limit                        = modulesList cfg offset limit "*"
+    modulesListFilteredH module_names offset limit   = modulesList cfg offset limit module_names
     composeH body test                               = compose cfg body test
     composeTypesH                                    = composeTypes
     composeQueueH                                    = composeQueue cfg
@@ -326,7 +328,6 @@ recipesList ServerConfig{..} mbranch moffset mlimit = liftIO $ RWL.withRead (git
     let recipes = sortBy caseInsensitiveT $ map (T.dropEnd 5) filenames
     return $ RecipesListResponse (applyLimits limit offset recipes) offset limit (length recipes)
   where
-    caseInsensitiveT a b = T.toCaseFold a `compare` T.toCaseFold b
     -- handleGitErrors :: GitError -> ServantErr
     -- handleGitErrors e = createApiError err500 "recipes_list" ("Git Error: " ++ show e)
 
@@ -1628,6 +1629,10 @@ instance FromJSON ModuleName where
     mnGroupType <- o .: "group_type"
     return ModuleName{..}
 
+-- | Make a ModuleName from a string
+mkModuleName :: T.Text -> ModuleName
+mkModuleName name = ModuleName { mnName=name, mnGroupType="rpm" }
+
 
 -- | The JSON response for /modules/list
 data ModulesListResponse = ModulesListResponse {
@@ -1673,15 +1678,19 @@ instance FromJSON ModulesListResponse where
 -- >      "limit": 20,
 -- >      "total": 6
 -- >  }
-modulesList :: ServerConfig -> Maybe Int -> Maybe Int -> [T.Text] -> Handler ModulesListResponse
-modulesList ServerConfig{..} moffset mlimit module_names = do
-    result <- runExceptT $ runSqlPool groups cfgPool
+modulesList :: ServerConfig -> Maybe Int -> Maybe Int -> String -> Handler ModulesListResponse
+
+-- | Special case for listing all the modules
+-- Uses SQL offset, limit, and case-insensitive sorting
+modulesList ServerConfig{..} moffset mlimit "*" = do
+    result <- runExceptT $ flip runSqlPool cfgPool $ getGroupsLike offset64 limit64 "%"
     case result of
-        Left _       -> return $ ModulesListResponse [] offset limit 0
-        Right tuples -> let names = map snd $ applyLimits limit offset tuples
-                            objs  = if null module_names then map mkModuleName names
-                                    else map mkModuleName $ filter (`elem` module_names) names
-                        in  return $ ModulesListResponse objs offset limit (length tuples)
+        Left  _                 ->
+            return $ ModulesListResponse [] offset limit 0
+        Right (tuples, total64) ->
+            let names = nubOrd $ map snd tuples
+                objs = map mkModuleName names
+            in  return $ ModulesListResponse objs offset limit (fromIntegral total64)
   where
     -- | Return the offset or the default
     offset :: Int
@@ -1691,8 +1700,32 @@ modulesList ServerConfig{..} moffset mlimit module_names = do
     limit :: Int
     limit  = fromMaybe 20 mlimit
 
-    mkModuleName :: T.Text -> ModuleName
-    mkModuleName name = ModuleName { mnName=name, mnGroupType="rpm" }
+    -- | Return the offset or the default
+    offset64 :: Maybe Int64
+    offset64 = Just $ fromIntegral $ fromMaybe 0 moffset
+
+    -- | Return the limit or the default
+    limit64 :: Maybe Int64
+    limit64  = Just $ fromIntegral $ fromMaybe 20 mlimit
+
+modulesList ServerConfig{..} moffset mlimit module_names = do
+    -- Substitute % for * in the module_names
+    let module_names_list = map T.pack $ argify [map (\c -> if c == '*' then '%' else c) module_names]
+    result <- runExceptT $ flip runSqlPool cfgPool $ concatMapM (fmap fst . getGroupsLike Nothing Nothing) module_names_list
+    case result of
+        Left _       -> return $ ModulesListResponse [] offset limit 0
+        Right tuples -> let names = nubOrd $ sortBy caseInsensitiveT $ map snd tuples
+                            total = length names
+                            objs = applyLimits limit offset $ map mkModuleName names
+                        in  return $ ModulesListResponse objs offset limit total
+  where
+    -- | Return the offset or the default
+    offset :: Int
+    offset = fromMaybe 0 moffset
+
+    -- | Return the limit or the default
+    limit :: Int
+    limit  = fromMaybe 20 mlimit
 
 data ComposeBody = ComposeBody {
     cbName :: T.Text,                                                   -- ^ Recipe name (from /blueprints/list)

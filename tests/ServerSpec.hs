@@ -284,6 +284,31 @@ projectsInfoResponse2 = ProjectsInfoResponse [
                   piSummary = "Dummy summary",
                   piUpstream = "UPSTREAM_VCS" } ]
 
+modulesListResponse1 :: ModulesListResponse
+modulesListResponse1 = ModulesListResponse
+    [ ModuleName "bdcs-fake-bart" "rpm"
+    , ModuleName "bdcs-fake-homer" "rpm"
+    , ModuleName "bdcs-fake-lisa" "rpm"
+    , ModuleName "bdcs-fake-sax" "rpm"]
+    0 20 4
+
+modulesListResponse2 :: ModulesListResponse
+modulesListResponse2 = ModulesListResponse
+    [ ModuleName "bdcs-fake-bart" "rpm"
+    , ModuleName "bdcs-fake-homer" "rpm"]
+    0 2 4
+
+modulesListResponse3 :: ModulesListResponse
+modulesListResponse3 = ModulesListResponse
+    [ ModuleName "bdcs-fake-lisa" "rpm"
+    , ModuleName "bdcs-fake-sax" "rpm"]
+    2 20 4
+
+modulesListResponse4 :: ModulesListResponse
+modulesListResponse4 = ModulesListResponse
+    [ ModuleName "bdcs-fake-bart" "rpm"]
+    0 20 1
+
 -- | Check the status response
 -- Make sure it looks reasonable
 checkStatusResponse :: ClientM Bool
@@ -565,6 +590,22 @@ spec = do
 
             it "Get info on two projects" $ \env ->
                 try env (getProjectsInfo "bdcs-fake-bart,bdcs-fake-sax") `shouldReturn` projectsInfoResponse2
+
+            it "Get list of modules" $ \env ->
+                try env (getModulesList Nothing Nothing) `shouldReturn` modulesListResponse1
+
+            it "Get first 2 modules" $ \env ->
+                try env (getModulesList Nothing (Just 2)) `shouldReturn` modulesListResponse2
+
+            it "Get last 2 modules" $ \env ->
+                try env (getModulesList (Just 2) Nothing) `shouldReturn` modulesListResponse3
+
+            it "Get list of modules with 'bart' in them" $ \env ->
+                try env (getModulesList' "*bart*" Nothing Nothing) `shouldReturn` modulesListResponse4
+
+            it "Get list of modules starting with 'bdcs' in them" $ \env ->
+                try env (getModulesList' "bdcs*" Nothing Nothing) `shouldReturn` modulesListResponse1
+
 
     describe "cleanup" $
         it "Remove the temporary directory" $
